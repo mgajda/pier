@@ -7,8 +7,10 @@ module Pier.Core.Internal.Directory
     , parentDirectory
     ) where
 
+import Control.Exception(catchJust)
 import Control.Monad.IO.Class
 import Development.Shake.FilePath
+import GHC.IO.Exception
 import System.Directory
 import qualified System.Posix.Files as Posix
 
@@ -63,7 +65,7 @@ copyDirectory src dest = do
     createParentIfMissing dest
     forFileRecursive_ act src
   where
-    act RegularFile f = Posix.createLink f $ dest </> makeRelative src f
+    act RegularFile f = linkOrCopyFile f $ dest </> makeRelative src f
     act SymbolicLink f = do
         target <- getSymbolicLinkTarget f
         let g = dest </> makeRelative src f
@@ -71,3 +73,17 @@ copyDirectory src dest = do
         createFileLink target g
     act DirectoryStart f = createDirectoryIfMissing False (dest </> makeRelative src f)
     act DirectoryEnd _ = return ()
+
+-- | Try to hard-link file, and copy it if it fails because source and destination are on different devices.
+linkOrCopyFile :: FilePath -> FilePath -> IO ()
+linkOrCopyFile src dst =
+  catchJust
+     catchUnsupportedLink
+    (Posix.createLink src dst)
+    (\_ -> copyFile   src dst)
+
+-- | Check if the exception is because we tried to hard-link files on different devices
+catchUnsupportedLink :: IOException -> Maybe IOException
+catchUnsupportedLink e@(IOError {ioe_errno=Just 18}) = Just e
+catchUnsupportedLink _                               = Nothing
+
